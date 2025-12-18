@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from filesystem.file_utils import FileUtils
+
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Tuple
 
@@ -59,23 +61,17 @@ class Trainer:
         layers = [
             SwanConv2d(out_channels=64, kernel_size=3, stride=1, padding=1, bias=False),
             SwanReLU(),
-
             SwanMaxPool2d(kernel_size=2, stride=2),
 
             SwanConv2d(out_channels=64, kernel_size=3, stride=1, padding=1, bias=True),
             SwanReLU(),
-
             SwanMaxPool2d(kernel_size=2, stride=2),
 
             SwanFlatten(),
-
-            # Keras: Dense(NUM_CATEGORIES * 2)
-            SwanLinear(out_features=cls.NUM_CATEGORIES * 2, bias=True),
+            SwanLinear(out_features=256, bias=True),
+            SwanReLU(),
             SwanDropout(p=0.5),
-
-            # Keras: Dense(NUM_CATEGORIES, activation="softmax")
-            # Torch: output logits; do NOT add softmax here
-            SwanLinear(out_features=cls.NUM_CATEGORIES, bias=True),
+            SwanLinear(out_features=cls.NUM_CLASSES, bias=True),
         ]
 
         return SwanFactory.build(
@@ -116,6 +112,28 @@ class Trainer:
                 print(f"epoch {epoch:02d} | train loss={tr.loss:.4f} acc={tr.acc:.4f} | val loss={va.loss:.4f} acc={va.acc:.4f}")
             else:
                 print(f"epoch {epoch:02d} | train loss={tr.loss:.4f} acc={tr.acc:.4f}")
+
+        # ------------------------------------------------------------
+        # Save latest model + configuration
+        # ------------------------------------------------------------
+        import io
+
+        buffer = io.BytesIO()
+        torch.save(model.state_dict(), buffer)
+        buffer.seek(0)
+
+        FileUtils.save_local(
+            data=buffer.read(),
+            subdirectory="training_run",
+            name="latest",
+            extension="pt",
+        )
+
+        FileUtils.save_local_json(
+            obj=swan_model.to_json(),
+            subdirectory="training_run",
+            name="latest_configuration",
+        )
 
         return swan_model
 
