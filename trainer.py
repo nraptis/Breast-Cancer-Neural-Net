@@ -102,8 +102,6 @@ class Trainer:
         swan_model = cls.bake()
         device = cls._select_device()
 
-        # Use Swan model (recommended). If you want the baseline linear model,
-        # swap the next line to the commented block below.
         model = swan_model.to_torch_sequential().to(device)
 
         # Baseline linear model:
@@ -117,7 +115,7 @@ class Trainer:
 
         print(swan_model.to_pretty_print())
         print(f"[Trainer] device={device} optimizer=Adam lr={optimizer.param_groups[0]['lr']} epochs={epochs}")
-
+        
         for epoch in range(1, epochs + 1):
             tr = cls._run_one_epoch(
                 device=device,
@@ -145,25 +143,20 @@ class Trainer:
             else:
                 print(f"epoch {epoch:02d} | train loss={tr.loss:.4f} acc={tr.acc:.4f}")
 
-        # ------------------------------------------------------------
-        # Save latest model + configuration
-        # ------------------------------------------------------------
-        buffer = io.BytesIO()
-        torch.save(model.state_dict(), buffer)
-        buffer.seek(0)
+            if ((epoch % 10) == 0) or epoch == epochs:
+                # ------------------------------------------------------------
+                # Save latest model + configuration
+                # ------------------------------------------------------------
+                buffer = io.BytesIO()
+                torch.save(model.state_dict(), buffer)
+                buffer.seek(0)
 
-        FileIO.save_local(
-            data=buffer.read(),
-            subdirectory="training_run",
-            name="latest",
-            extension="pt",
-        )
-
-        FileUtils.save_local_json(
-            obj=swan_model.to_json(),
-            subdirectory="training_run",
-            name="latest_configuration",
-        )
+                FileIO.save_local(
+                    data=buffer.read(),
+                    subdirectory="training_run",
+                    name="latest",
+                    extension="pt",
+                )
 
         return swan_model
 

@@ -37,7 +37,7 @@ def main():
     #train_dataset = BreastCancerDataset(root_dir = "data_split_tiny_fake", split = "train")
     #train_dataset = BreastCancerDataset(root_dir = "data_split_tiny", split = "train")
     train_dataset = BreastCancerDataset(root_dir = "data_split", split = "train")
-    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     Trainer.train(train_loader, epochs=1024)
     
 if __name__ == "__main__":
