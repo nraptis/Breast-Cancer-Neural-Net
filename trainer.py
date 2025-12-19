@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
-
+from collections import Counter
 import io
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -13,16 +14,7 @@ from torch.utils.data import DataLoader
 from filesystem.file_utils import FileUtils
 from filesystem.file_io import FileIO
 
-from swan.swan_factory import SwanFactory
-from swan.swan_model import SwanModel
-from swan.swan_layer import (
-    SwanConv2d,
-    SwanReLU,
-    SwanMaxPool2d,
-    SwanFlatten,
-    SwanLinear,
-    SwanDropout,
-)
+from breast_cancer_classifier import BreastCancerClassifier
 
 
 @dataclass(frozen=True)
@@ -35,22 +27,21 @@ class Trainer:
     """
     Minimal Torch trainer for binary classification (benign vs malignant).
 
-    Fixed for now:
-      - optimizer: Adam
-      - lr: 0.001
-      - loss: CrossEntropyLoss (expects logits, NOT softmax)
+    Notes:
+      - Trainer does NOT define the model architecture.
+      - Trainer consumes BreastCancerClassifier as the single source of truth.
+      - Validation NEVER updates weights.
     """
 
-    IMG_W = 224
-    IMG_H = 224
-    IMG_C = 3
-
-    NUM_CLASSES = 2
-
+    # Training hyperparameters
     LR = 0.0001
     EPOCHS = 5
 
-    GRAD_CLIP_NORM = 1.0  # set to 0.0 to disable
+    # Mirror model constants (for sanity checks / prints only)
+    IMG_W = BreastCancerClassifier.IMG_W
+    IMG_H = BreastCancerClassifier.IMG_H
+    IMG_C = BreastCancerClassifier.IMG_C
+    NUM_CLASSES = BreastCancerClassifier.NUM_CLASSES
 
     @classmethod
     def _select_device(cls) -> torch.device:
@@ -61,32 +52,30 @@ class Trainer:
         return torch.device("cpu")
 
     @classmethod
-    def bake(cls) -> SwanModel:
-        layers = [
-            SwanConv2d(out_channels=64, kernel_size=3, stride=1, padding=1, bias=False),
-            SwanReLU(),
-            SwanMaxPool2d(kernel_size=2, stride=2),
+    def _loader_info(cls, name: str, loader: DataLoader) -> None:
+        ds = loader.dataset
+        n = len(ds)
 
-            SwanConv2d(out_channels=64, kernel_size=3, stride=1, padding=1, bias=True),
-            SwanReLU(),
-            SwanMaxPool2d(kernel_size=2, stride=2),
+        ds_name = type(ds).__name__
 
-            SwanConv2d(out_channels=64, kernel_size=3, stride=1, padding=1, bias=True),
-            SwanReLU(),
-            SwanMaxPool2d(kernel_size=2, stride=2),
+        xb, yb = next(iter(loader))
 
-            SwanFlatten(),
-            SwanLinear(out_features=256, bias=True),
-            SwanReLU(),
-            SwanDropout(p=0.5),
-            SwanLinear(out_features=cls.NUM_CLASSES, bias=True),
-        ]
+        xb_shape = tuple(xb.shape)
+        yb_shape = tuple(yb.shape)
 
-        return SwanFactory.build(
-            input_image_width=cls.IMG_W,
-            input_image_height=cls.IMG_H,
-            input_image_channels=cls.IMG_C,
-            layers=layers,
+        y_list = yb.detach().cpu().tolist()
+        ctr = Counter(y_list)
+
+        y_min = min(y_list) if y_list else None
+        y_max = max(y_list) if y_list else None
+
+        print(f"[Data] {name}: dataset={ds_name} n={n} batch_size={loader.batch_size}")
+        print(f"[Data] {name}: xb shape={xb_shape} dtype={xb.dtype}")
+        print(f"[Data] {name}: yb shape={yb_shape} dtype={yb.dtype}")
+        print(f"[Data] {name}: label counts={dict(ctr)} range=[{y_min},{y_max}]")
+        print(
+            f"[Data] {name}: expected xb=[N,{cls.IMG_C},{cls.IMG_H},{cls.IMG_W}] "
+            f"y in [0,{cls.NUM_CLASSES-1}]"
         )
 
     @classmethod
@@ -95,27 +84,35 @@ class Trainer:
         train_loader: DataLoader,
         val_loader: Optional[DataLoader] = None,
         epochs: Optional[int] = None,
-    ) -> SwanModel:
+    ):
         if epochs is None:
             epochs = cls.EPOCHS
 
-        swan_model = cls.bake()
+        cls._loader_info("train", train_loader)
+        if val_loader is not None:
+            cls._loader_info("val", val_loader)
+        else:
+            print("[Data] val: None (no validation loader provided)")
+
         device = cls._select_device()
 
+        # ---- build model from canonical classifier ----
+        swan_model = BreastCancerClassifier.bake_swan()
         model = swan_model.to_torch_sequential().to(device)
 
-        # Baseline linear model:
-        # model = nn.Sequential(
-        #     nn.Flatten(),
-        #     nn.Linear(cls.IMG_W * cls.IMG_H * cls.IMG_C, cls.NUM_CLASSES),
-        # ).to(device)
+        # Save architecture snapshot
+        FileUtils.save_local_json(
+            obj=swan_model.to_json(),
+            subdirectory="training_run",
+            name="latest_configuration",
+        )
 
         optimizer = torch.optim.Adam(model.parameters(), lr=cls.LR)
         criterion = nn.CrossEntropyLoss()
 
         print(swan_model.to_pretty_print())
-        print(f"[Trainer] device={device} optimizer=Adam lr={optimizer.param_groups[0]['lr']} epochs={epochs}")
-        
+        print(f"[Trainer] device={device} optimizer=Adam lr={cls.LR} epochs={epochs}")
+
         for epoch in range(1, epochs + 1):
             tr = cls._run_one_epoch(
                 device=device,
@@ -131,7 +128,7 @@ class Trainer:
                     device=device,
                     model=model,
                     loader=val_loader,
-                    optimizer=optimizer,   # unused in eval, but fine
+                    optimizer=optimizer,   # unused
                     criterion=criterion,
                     train=False,
                 )
@@ -141,12 +138,12 @@ class Trainer:
                     f"val loss={va.loss:.4f} acc={va.acc:.4f}"
                 )
             else:
-                print(f"epoch {epoch:02d} | train loss={tr.loss:.4f} acc={tr.acc:.4f}")
+                print(
+                    f"epoch {epoch:02d} | "
+                    f"train loss={tr.loss:.4f} acc={tr.acc:.4f}"
+                )
 
-            if ((epoch % 10) == 0) or epoch == epochs:
-                # ------------------------------------------------------------
-                # Save latest model + configuration
-                # ------------------------------------------------------------
+            if (epoch % 10) == 0 or epoch == epochs:
                 buffer = io.BytesIO()
                 torch.save(model.state_dict(), buffer)
                 buffer.seek(0)
@@ -154,7 +151,7 @@ class Trainer:
                 FileIO.save_local(
                     data=buffer.read(),
                     subdirectory="training_run",
-                    name="latest",
+                    name=f"latest_{epoch:04d}",
                     extension="pt",
                 )
 
@@ -184,22 +181,19 @@ class Trainer:
                 optimizer.zero_grad(set_to_none=True)
 
             with torch.set_grad_enabled(train):
-                logits = model(xb)          # [N, 2]
+                logits = model(xb)
                 loss = criterion(logits, yb)
 
                 if train:
                     loss.backward()
-                    if cls.GRAD_CLIP_NORM and cls.GRAD_CLIP_NORM > 0.0:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), cls.GRAD_CLIP_NORM)
                     optimizer.step()
 
-            # Stats from the same forward pass (no logits2, no loss2)
             batch_size = int(yb.numel())
             total_loss += float(loss.item()) * batch_size
             preds = logits.argmax(dim=1)
             correct += int((preds == yb).sum().item())
             total += batch_size
-        
+
         avg_loss = total_loss / max(1, total)
         acc = correct / max(1, total)
         return TrainStats(loss=avg_loss, acc=acc)
