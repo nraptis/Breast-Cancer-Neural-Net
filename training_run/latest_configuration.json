@@ -1,0 +1,98 @@
+{
+  "type": "swan_model",
+  "input": {
+    "width": 224,
+    "height": 224,
+    "channels": 3
+  },
+  "layers": [
+    {
+      "type": "conv2d",
+      "out_channels": 64,
+      "kernel_size": 3,
+      "stride": 1,
+      "padding": 1,
+      "dilation": 1,
+      "groups": 1,
+      "bias": false
+    },
+    {
+      "type": "relu",
+      "inplace": false
+    },
+    {
+      "type": "max_pool2d",
+      "kernel_size": 2,
+      "stride": 2,
+      "padding": 0,
+      "dilation": 1,
+      "ceil_mode": false
+    },
+    {
+      "type": "conv2d",
+      "out_channels": 64,
+      "kernel_size": 3,
+      "stride": 1,
+      "padding": 1,
+      "dilation": 1,
+      "groups": 1,
+      "bias": true
+    },
+    {
+      "type": "relu",
+      "inplace": false
+    },
+    {
+      "type": "max_pool2d",
+      "kernel_size": 2,
+      "stride": 2,
+      "padding": 0,
+      "dilation": 1,
+      "ceil_mode": false
+    },
+    {
+      "type": "conv2d",
+      "out_channels": 64,
+      "kernel_size": 3,
+      "stride": 1,
+      "padding": 1,
+      "dilation": 1,
+      "groups": 1,
+      "bias": true
+    },
+    {
+      "type": "relu",
+      "inplace": false
+    },
+    {
+      "type": "max_pool2d",
+      "kernel_size": 2,
+      "stride": 2,
+      "padding": 0,
+      "dilation": 1,
+      "ceil_mode": false
+    },
+    {
+      "type": "flatten"
+    },
+    {
+      "type": "linear",
+      "out_features": 256,
+      "bias": true
+    },
+    {
+      "type": "relu",
+      "inplace": false
+    },
+    {
+      "type": "dropout",
+      "p": 0.0,
+      "inplace": false
+    },
+    {
+      "type": "linear",
+      "out_features": 2,
+      "bias": true
+    }
+  ]
+}

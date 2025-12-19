@@ -4,6 +4,7 @@ from splitter import Splitter
 from trainer import Trainer
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
+from torch.utils.data import Subset
 from dataset import BreastCancerDataset
 
 def main():
@@ -32,10 +33,12 @@ def main():
     Splitter.go(data_processed_benign, data_processed_malignant)
     """
 
+    # train_dataset = BreastCancerDataset(root_dir = "data_split", split = "train")
+    #train_dataset = BreastCancerDataset(root_dir = "data_split_tiny_fake", split = "train")
+    #train_dataset = BreastCancerDataset(root_dir = "data_split_tiny", split = "train")
     train_dataset = BreastCancerDataset(root_dir = "data_split", split = "train")
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    Trainer.train(train_loader, epochs=7)
-
-
+    train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+    Trainer.train(train_loader, epochs=1024)
+    
 if __name__ == "__main__":
     main()

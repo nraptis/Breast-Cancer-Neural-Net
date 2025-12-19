@@ -28,8 +28,12 @@ class BreastCancerDataset(Dataset):
                 raise ValueError(f"Class directory not found: {class_dir}")
             
             for img_path in class_dir.iterdir():
-                if img_path.is_file():
-                    self.samples.append((img_path, label))
+                if not img_path.is_file():
+                    continue
+                if img_path.suffix.lower() != ".png":
+                    continue
+                self.samples.append((img_path, label))
+
 
     def __len__(self) -> int:
         return len(self.samples)

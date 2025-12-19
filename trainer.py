@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from filesystem.file_utils import FileUtils
-
 from dataclasses import dataclass
-from typing import Dict, Any, Optional, Tuple
+from typing import Optional
 
+import io
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+
+from filesystem.file_utils import FileUtils
+from filesystem.file_io import FileIO
 
 from swan.swan_factory import SwanFactory
 from swan.swan_model import SwanModel
@@ -21,6 +23,7 @@ from swan.swan_layer import (
     SwanLinear,
     SwanDropout,
 )
+
 
 @dataclass(frozen=True)
 class TrainStats:
@@ -42,11 +45,12 @@ class Trainer:
     IMG_H = 224
     IMG_C = 3
 
-    NUM_CATEGORIES = 2
+    NUM_CLASSES = 2
 
-    LR = 0.001
-
+    LR = 0.0001
     EPOCHS = 5
+
+    GRAD_CLIP_NORM = 1.0  # set to 0.0 to disable
 
     @classmethod
     def _select_device(cls) -> torch.device:
@@ -60,6 +64,10 @@ class Trainer:
     def bake(cls) -> SwanModel:
         layers = [
             SwanConv2d(out_channels=64, kernel_size=3, stride=1, padding=1, bias=False),
+            SwanReLU(),
+            SwanMaxPool2d(kernel_size=2, stride=2),
+
+            SwanConv2d(out_channels=64, kernel_size=3, stride=1, padding=1, bias=True),
             SwanReLU(),
             SwanMaxPool2d(kernel_size=2, stride=2),
 
@@ -88,41 +96,63 @@ class Trainer:
         val_loader: Optional[DataLoader] = None,
         epochs: Optional[int] = None,
     ) -> SwanModel:
-        """
-        Trains the baked model. Returns the SwanModel (which contains torch Sequential).
-        """
         if epochs is None:
             epochs = cls.EPOCHS
 
         swan_model = cls.bake()
         device = cls._select_device()
+
+        # Use Swan model (recommended). If you want the baseline linear model,
+        # swap the next line to the commented block below.
         model = swan_model.to_torch_sequential().to(device)
 
+        # Baseline linear model:
+        # model = nn.Sequential(
+        #     nn.Flatten(),
+        #     nn.Linear(cls.IMG_W * cls.IMG_H * cls.IMG_C, cls.NUM_CLASSES),
+        # ).to(device)
 
         optimizer = torch.optim.Adam(model.parameters(), lr=cls.LR)
         criterion = nn.CrossEntropyLoss()
 
         print(swan_model.to_pretty_print())
-        print(f"[Trainer] device={device} lr={cls.LR} epochs={epochs}")
+        print(f"[Trainer] device={device} optimizer=Adam lr={optimizer.param_groups[0]['lr']} epochs={epochs}")
 
         for epoch in range(1, epochs + 1):
-            tr = cls._run_one_epoch(device, model, train_loader, optimizer, criterion, train=True)
+            tr = cls._run_one_epoch(
+                device=device,
+                model=model,
+                loader=train_loader,
+                optimizer=optimizer,
+                criterion=criterion,
+                train=True,
+            )
+
             if val_loader is not None:
-                va = cls._run_one_epoch(device, model, val_loader, optimizer, criterion, train=False)
-                print(f"epoch {epoch:02d} | train loss={tr.loss:.4f} acc={tr.acc:.4f} | val loss={va.loss:.4f} acc={va.acc:.4f}")
+                va = cls._run_one_epoch(
+                    device=device,
+                    model=model,
+                    loader=val_loader,
+                    optimizer=optimizer,   # unused in eval, but fine
+                    criterion=criterion,
+                    train=False,
+                )
+                print(
+                    f"epoch {epoch:02d} | "
+                    f"train loss={tr.loss:.4f} acc={tr.acc:.4f} | "
+                    f"val loss={va.loss:.4f} acc={va.acc:.4f}"
+                )
             else:
                 print(f"epoch {epoch:02d} | train loss={tr.loss:.4f} acc={tr.acc:.4f}")
 
         # ------------------------------------------------------------
         # Save latest model + configuration
         # ------------------------------------------------------------
-        import io
-
         buffer = io.BytesIO()
         torch.save(model.state_dict(), buffer)
         buffer.seek(0)
 
-        FileUtils.save_local(
+        FileIO.save_local(
             data=buffer.read(),
             subdirectory="training_run",
             name="latest",
@@ -137,10 +167,6 @@ class Trainer:
 
         return swan_model
 
-    # -------------------------
-    # internal
-    # -------------------------
-
     @classmethod
     def _run_one_epoch(
         cls,
@@ -151,35 +177,36 @@ class Trainer:
         criterion: nn.Module,
         train: bool,
     ) -> TrainStats:
-        if train:
-            model.train()
-        else:
-            model.eval()
+        model.train() if train else model.eval()
 
         total_loss = 0.0
         correct = 0
         total = 0
 
         for xb, yb in loader:
-            xb = xb.to(device, non_blocking=True)
-            yb = yb.to(device, non_blocking=True)
+            xb = xb.to(device)
+            yb = yb.to(device)
 
             if train:
                 optimizer.zero_grad(set_to_none=True)
 
             with torch.set_grad_enabled(train):
-                logits = model(xb)              # shape: [N, 2]
-                loss = criterion(logits, yb)     # yb shape: [N] of {0,1}
+                logits = model(xb)          # [N, 2]
+                loss = criterion(logits, yb)
 
                 if train:
                     loss.backward()
+                    if cls.GRAD_CLIP_NORM and cls.GRAD_CLIP_NORM > 0.0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), cls.GRAD_CLIP_NORM)
                     optimizer.step()
 
-            total_loss += float(loss.item()) * int(xb.shape[0])
+            # Stats from the same forward pass (no logits2, no loss2)
+            batch_size = int(yb.numel())
+            total_loss += float(loss.item()) * batch_size
             preds = logits.argmax(dim=1)
             correct += int((preds == yb).sum().item())
-            total += int(xb.shape[0])
-
+            total += batch_size
+        
         avg_loss = total_loss / max(1, total)
         acc = correct / max(1, total)
         return TrainStats(loss=avg_loss, acc=acc)
